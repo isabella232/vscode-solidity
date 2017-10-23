@@ -4,8 +4,7 @@ export function formatPath(contractPath: string) {
     return contractPath.replace(/\\/g, '/');
 }
 
-
-export function throttle(fn, threshhold): Function {
+export function throttle(threshhold, fn): Function {
     threshhold || (threshhold = 250);
     var last, deferTimer;
 

@@ -59,49 +59,12 @@ let validationDelay = 1500;
 let validatingDocument = false;
 let validatingAllDocuments = false;
 
-function validateCompilation(document): Promise<boolean> {
-    const filePath = Files.uriToFilePath(document.uri);
-    const documentText = document.getText();
-    const validateFlagToFalse = () => validatingDocument = false;
-
-    if (enabledAsYouTypeErrorCheck) {
-        validatingDocument = true;
-
-        return solcCompiler
-            .compileSolidityDocumentAndGetDiagnosticErrors(filePath, documentText)
-            .then(function (errors: Diagnostic[]) {
-                lastCompileErrorsForDocument[filePath] = errors;
-
-                const linterDiagnostics = linter && linter.validate(filePath, documentText);
-                const diagnostics = errors.concat(linterDiagnostics || []);
-                sendDiagnostics(diagnostics, document.uri);
-            })
-            .then(validateFlagToFalse, validateFlagToFalse);
-    } else {
-        return Promise.resolve(false);
-    }
-}
-
-const lintAndSendDiagnostics = throttle(document => {
-    const filePath = Files.uriToFilePath(document.uri);
-    const documentText = document.getText();
-
-    if (linter !== null) {
-        const errors = linter.validate(filePath, documentText);
-
-        const curCompileErrors = lastCompileErrorsForDocument[filePath] || [];
-        sendDiagnostics(errors.concat(curCompileErrors), document.uri);
-    }
-}, 100);
-
-function sendDiagnostics(diagnostics, uri) {
-    connection.sendDiagnostics({ diagnostics, uri });
-}
-
 connection.onSignatureHelp((textDocumentPosition: TextDocumentPositionParams): SignatureHelp => {
     return null;
 });
 
+// This handler resolve additional information for the item selected in
+// the completion list.
 connection.onCompletion((textDocumentPosition: TextDocumentPositionParams): CompletionItem[] => {
     // The pass parameter contains the position of the text document in
     // which code complete got requested. For the example we ignore this
@@ -152,39 +115,6 @@ connection.onCompletion((textDocumentPosition: TextDocumentPositionParams): Comp
     }
     return completionItems;
 });
-
-
-
-
-// This handler resolve additional information for the item selected in
-// the completion list.
- // connection.onCompletionResolve((item: CompletionItem): CompletionItem => {
- //   item.
- // });
-
-function validateAllDocuments() {
-    if (!validatingAllDocuments) {
-        validatingAllDocuments = true;
-
-        const compileResults = 
-            documents
-                .all()
-                .map(document => validateCompilation(document));
-
-        const validateAllFlagToFalse = (() => validatingAllDocuments = false);
-        Promise.all(compileResults).then(validateAllFlagToFalse, validateAllFlagToFalse);
-    }
-}
-
-function startValidation() {
-    if (enabledAsYouTypeErrorCheck) {
-        solcCompiler.intialiseCompiler(compileUsingLocalVersion, compileUsingRemoteVersion).then(() => {
-            validateAllDocuments();
-        });
-    } else {
-        validateAllDocuments();
-    }
-}
 
 documents.onDidChangeContent(event => {
     const document = event.document;
@@ -256,3 +186,94 @@ connection.onDidChangeConfiguration((change) => {
 });
 
 connection.listen();
+
+function validateAllDocuments() {
+    if (!validatingAllDocuments) {
+        validatingAllDocuments = true;
+
+        const compileResults = documents
+            .all()
+            .map(document => validateCompilation(document));
+
+        Promise
+            .all(compileResults)
+            .then(validateAllFlagToFalse, validateAllFlagToFalse);
+    }
+}
+
+function startValidation() {
+    if (enabledAsYouTypeErrorCheck) {
+        solcCompiler
+            .intialiseCompiler(compileUsingLocalVersion, compileUsingRemoteVersion)
+            .then(() => validateAllDocuments());
+    } else {
+        validateAllDocuments();
+    }
+}
+
+function validateCompilation(document): Promise<boolean> {
+    if (enabledAsYouTypeErrorCheck) {
+        validatingDocument = true;
+
+        return compileFile(document)
+            .then(storeCompileErrors.bind(this, document))
+            .then(appendLinterErrors(document))
+            .then(errors => sendDiagnostics(document.uri, ...errors))
+            .then(validateFlagToFalse, validateFlagToFalse);
+    } else {
+        return Promise.resolve(false);
+    }
+}
+
+const lintAndSendDiagnostics = throttle(100, document => 
+    sendDiagnostics(document.uri, lintFile(document), lastCompileErrorsOf(document))
+);
+
+function lintFile(document) {
+    if (!linter) {
+        return [];
+    }
+
+    return linter.validate(fileOf(document), document.getText());
+}
+
+function compileFile(document) {
+    const filePath = fileOf(document);
+    const code = document.getText();
+
+    return solcCompiler
+        .compileSolidityDocumentAndGetDiagnosticErrors(filePath, code);
+}
+
+function sendDiagnostics(uri, ...diagnosticsList) {
+    const diagnostics = mergeErrors(...diagnosticsList);
+    connection.sendDiagnostics({ diagnostics, uri });
+}
+
+function fileOf(document) {
+    return Files.uriToFilePath(document.uri);
+}
+
+function mergeErrors(...errors): Diagnostic[] {
+    return errors
+        .filter(i => i && i.length > 0)
+        .reduce((prev, curErrors) => prev.concat(curErrors), []);
+}
+
+function lastCompileErrorsOf(document): Diagnostic[] {
+    return lastCompileErrorsForDocument[fileOf(document)] || [];
+}
+
+function storeCompileErrors(document, errors) {
+    const filePath = fileOf(document);
+    return lastCompileErrorsForDocument[filePath] = errors;
+}
+
+const validateFlagToFalse = () => 
+    validatingDocument = false;
+
+const validateAllFlagToFalse = () => 
+    validatingAllDocuments = false;
+
+const appendLinterErrors = document => errors => 
+    [errors, lintFile(document)];

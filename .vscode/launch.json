@@ -28,10 +28,10 @@
             "name": "Attach",
             "type": "node",
             "request": "attach",
-            "port": 6009,
+            "port": 6004,
             "sourceMaps": true,
             "outFiles": [ "${workspaceRoot}/out/src/**/*.js" ],
-            "protocol": "legacy"
+            "protocol": "inspector"
         }
         ]
 }
